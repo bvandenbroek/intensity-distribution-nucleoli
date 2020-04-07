@@ -66,7 +66,7 @@ if(editNuclei == true) display_images=true;
 threshold_nuc_bias = 0;
 watershed = true;
 
-nBins = maxDist/increment;
+nBins = floor(maxDist/increment);
 probDensityTable = "3D_profile";
 Table.create(probDensityTable);
 

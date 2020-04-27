@@ -8,7 +8,7 @@
  * 
  * For time series another macro is available.
  *  
- * Bram van den Broek, Netherlands Cancer Institute, 2012-2018
+ * Bram van den Broek, Netherlands Cancer Institute, 2012-2020
  * b.vd.broek@nki.nl
  * 
  * version 3, February 2014:

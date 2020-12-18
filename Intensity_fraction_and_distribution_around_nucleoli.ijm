@@ -2,7 +2,7 @@
  * Macro to quantify the intensity fraction of a signal (here centromeres) inside nucleoli,
  * versus outside, and calculate the 3D intensity distribution outside the nucleoli.
  * 
- * Bram van den Broek, Netherlands Cancer Institute, 2019
+ * Bram van den Broek, Netherlands Cancer Institute, 2019-2020
  * b.vd.broek@nki.nl
  * 
  * Required input: a folder containing 3D images with 3 channels: nuclei, nucleoli and signal of interest.
@@ -102,12 +102,11 @@ processFolder(input);
 restoreSettings();
 
 
-
-
+
 
 //////////  FUNCTIONS  //////////
 
-// function to scan folders/subfolders/files to count files with correct fileExtension
+// function to scan folders/subfolders/files to COUNT files with correct fileExtension
 function scanFolder(input) {
 	list = getFileList(input);
 	list = Array.sort(list);
@@ -119,9 +118,8 @@ function scanFolder(input) {
 	}
 }
 
-
-
-// function to scan folders/subfolders/files to find files with correct fileExtension
+
+// function to scan folders/subfolders/files to PROCESS files with correct fileExtension
 function processFolder(input) {
 	list = getFileList(input);
 	list = Array.sort(list);
@@ -142,11 +140,9 @@ function processFolder(input) {
 	print("\\Update2:Average speed: "+d2s(current_image_nr/processtime,1)+" images per minute.");
 	print("\\Update3:Total run time: "+d2s(processtime,1)+" minutes.");
 	print("\\Update4:-------------------------------------------------------------------------");
+}
 
-}
-
-
-
+
 function processFile(input, outputSubfolder, file) {
 	if(nImages>0) run("Close All");
 	roiManager("Reset");
@@ -210,8 +206,7 @@ function processFile(input, outputSubfolder, file) {
 		roiHeightMax = maxOf(roiHeightMax,roiHeight);
 	}
 	concatenationString = "";
-
-
+
 	//Create masked Centromers stack
 	selectWindow(original);
 	run("Select None");
@@ -263,6 +258,7 @@ function processFile(input, outputSubfolder, file) {
 		roiManager("Select",i);
 		run("Duplicate...", "duplicate title=Nucleoli_"+i+" channels="+chNucleoli);
 		run("Clear Outside", "stack");
+
 		//Determine threshold
 			run("Z Project...", "projection=[Max Intensity]");
 			run("Restore Selection");
@@ -274,6 +270,7 @@ function processFile(input, outputSubfolder, file) {
 
 		run("Duplicate...", "duplicate title=Centromers_"+i+" channels="+chCentromers);
 		run("Clear Outside", "stack");
+
 		//Measure Centromer total signal
 		run("Measure Stack...");
 
@@ -546,8 +543,7 @@ function segmentNuclei(image) {
 	run("Clear Results");
 	roiManager("Measure");
 	nucleusArea = Table.getColumn("Area", "Results");
-
-	for(j=0;j<roiManager("count");j++) {
+	for(j=0;j<roiManager("count");j++) {
 		roiManager("select", j);
 		roiManager("rename", "nucleus_"+j+1);
 	}
@@ -680,7 +676,6 @@ function edit_ROIs(image1) {
 			run("Select None");
 			updateDisplay();
 		}
-	
 		if(flags==4) {	//right button: combine selected ROIs
 			selected_ROI_array = newArray(roiManager("Count"));	//create array with indices of selected ROIs
 			j=0;
@@ -715,14 +710,11 @@ function edit_ROIs(image1) {
 				color_ROIs();
 			}
 		}
-	
-	
 		if(nROIs!=roiManager("Count")) {	//change in the number of ROIs 
 			run("Select None");
 			color_ROIs();
 			nROIs = roiManager("Count");
 		}
-	
 		else wait(50);
 	}	//end of while loop
 	

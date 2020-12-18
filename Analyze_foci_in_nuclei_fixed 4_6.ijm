@@ -87,10 +87,17 @@
  *  version 4.4 Januari 2020:
  *  - Saves .tsv files now
  *  - Trying to play around with background subtraction/outlier removal
+ *  
+ *  version 4.5 May 2020:
+ *  - Finally ditched the BioFormats windowless importer
+ *  - Improved nuclei editing. N.B. Editing now ends with space bar
+ *  
+ *  version 4.6 September 2020:
+ *  - Added support for measuring foci in the nuclei channel (ch_nuclei = ch_foci)
  */
 
 
-requires("1.52");
+requires("1.52n");
 
 saveSettings();
 setOption("BlackBackground", true);
@@ -104,7 +111,7 @@ var pause=false;
 var clean=true;
 var large_dots=true;
 var current_slice = 1;
-var median_radius_nuclei = 2;	//Was set at 2!
+var median_radius_nuclei = 5;	//Was set at 2!
 var lower_limit = 0;
 var analyze_all = false;
 var pause_after_file = false;
@@ -122,8 +129,8 @@ var rolling_ball_radius = 100;
 var watershed = true;		//separate touching nuclei
 var speed_mode = true;
 var remove_pixel_calibration = false;
-var logarithm = true;				//this may help if the nuclei signal is very rough
-var threshold_scaling_coeff = 0.5;	//-1 for no differential thresholding, 0.5 for the square root of the difference with the average threshold of all nuclei. 
+var logarithm = false;				//this may help if the nuclei signal is very rough
+var threshold_scaling_coeff = -1;	//-1 for no differential thresholding, 0.5 for the square root of the difference with the average threshold of all nuclei. 
 var lowerPercentile = 0.0;
 var upperPercentile = 1.0;
 
@@ -177,20 +184,32 @@ var sigma_small;	//size of Gaussian blur filter (small) for foci background subt
 
 
 if(nImages>0) run("Close All");
-//path = File.openDialog("Select a File");
-run("Bio-Formats Windowless Importer");
+path = File.openDialog("Select a File");
+run("Bio-Formats Importer", "open=["+path+"] autoscale color_mode=Default rois_import=[ROI manager] view=Hyperstack stack_order=XYCZT");
 run("Bio-Formats Macro Extensions");
 dir = getDirectory("image");
 file_name = getInfo("image.filename");
 rename(file_name);
 
+Stack.getDimensions(width, height, channels, slices, frames);
+if (bitDepth()!=24 && channels==1) exit("Multi-channel image required.");
+if (bitDepth()==24) run("Make Composite");	//convert RGB images
+if (bitDepth()==16) bits=16;
+else bits=8;
+run("32-bit");
+Stack.getDimensions(width, height, channels, slices, frames);
+if(remove_pixel_calibration==true) run("Properties...", "unit=pixels pixel_width=1 pixel_height=1 voxel_depth=1");	//For Martijn's wrong pixel calibration
+getPixelSize(unit, pw, ph, pd);
+setLocation(0, 0);
+
+
 extension_length=(lengthOf(file_name)- lengthOf(File.nameWithoutExtension)-1);
 extension = substring(file_name, (lengthOf(file_name)-extension_length));
 file_list = getFileList(dir); //get filenames of directory
 
-//make a list of images with 'extension' as extension.
+//make a list of images in that folder with 'extension' as extension.
 j=0;
-image_list=newArray(file_list.length);	//Dynamic array size doesn't work on Femke's Mac, so first make image_list the maximal size and then trim.
+image_list=newArray(file_list.length);	//Dynamic array size doesn't work on some Macs, so first make image_list the maximal size and then trim.
 for(i=0; i<file_list.length; i++){
 	if (endsWith(file_list[i],extension)) {
 		image_list[j] = file_list[i];
@@ -243,24 +262,10 @@ if (File.exists(config_file)) {
 	}
 }
 
-Stack.getDimensions(width, height, channels, slices, frames);
-if (bitDepth()!=24 && channels==1) exit("Multi-channel image required.");
-if (bitDepth()==24) run("Make Composite");	//convert RGB images
-if (bitDepth()==16) bits=16;
-else bits=8;
-run("32-bit");
-Stack.getDimensions(width, height, channels, slices, frames);
-
-
-if(remove_pixel_calibration==true) run("Properties...", "unit=pixels pixel_width=1 pixel_height=1 voxel_depth=1");	//For Martijn's wrong pixel calibration
-
-
-getPixelSize(unit, pw, ph, pd);
-setLocation(0, 0);
 
 
 //---------OPEN DIALOG
-Dialog.create("Options");
+Dialog.createNonBlocking("Options");
 	Dialog.addSlider("nuclei channel nr", 1, channels, ch_nuclei);
 	Dialog.addSlider("foci channel nr", 1, channels, ch_foci);
 	//Dialog.setInsets(0, 20, 0);
@@ -414,6 +419,7 @@ if(verbose==false) setBatchMode(true);
 
 run("Split Channels");
 selectWindow("C"+ch_nuclei+"-"+file_name);
+if(ch_nuclei == ch_foci) run("Duplicate...", "title=C"+ch_foci+"-"+file_name+" duplicate");
 
 //---------METHODS FOR NUCLEI DETECTION
 if (slices==1) {};
@@ -458,7 +464,7 @@ rename("nuclei");
 //---------MAIN PART
 
 segment_nuclei();
-if (manually_edit_nuclei==true) combine_ROIs("nuclei");
+if (manually_edit_nuclei==true) edit_ROIs("nuclei");
 selectWindow("segmented_nuclei");
 if (shrink_nuclei==true) {
 	for(i=0;i<roiManager("count");i++) {
@@ -1480,120 +1486,136 @@ function save_config_file() {
 }
 
 
-function combine_ROIs(image1) {
-
-shift=1;
-ctrl=2; 
-rightButton=4;
-alt=8;
-leftButton=16;
-insideROI = 32;
-
-flags=-1;
-//x2=-1; y2=-1; z2=-1; flags2=-1;
-
-selectWindow(image1);
-roiManager("Show All without labels");
-setOption("DisablePopupMenu", true);
-setBatchMode(true);
-resetMinAndMax();
-setBatchMode("show");
-showMessage("Combine ROIs of split nuclei. Select ROIs with left mouse button and right-click to merge them.\nLeft clicking while holding CTRL deletes a ROI.\nPress CTRL-shift-leftclick when finished editing.");
-
-for(i=0;i<roiManager("Count");i++) {	//unselect all ROIs
-	roiManager("Select",i);
-	roiManager("Rename", "ROI "+i);
-	Roi.setProperty("selected",false);
-	Roi.setStrokeColor("cyan");
-}
-
-//while(!isKeyDown("space")) {
-run("Remove Overlay");
-roiManager("Show All Without Labels");
-setOption("DisablePopupMenu", true);
-while(flags!=19) {						//exit loop by pressing ctrl-shift-leftclick
-	getCursorLoc(x, y, z, flags);
-//	if (x!=x2 || y!=y2 || z!=z2 || flags!=flags2) {
-
-	if(flags==16 || flags==18)	{
-		for(i=0;i<roiManager("Count");i++) {
-			roiManager("Select",i);
-			if(Roi.contains(x, y)==true) {
-			selected = Roi.getProperty("selected");
-				//click to select a single ROI
-				if(flags==16 && selected==false) {		//select ROI
-					//print("selecting ROI "+i);
-					Roi.setStrokeColor("red");
-					Roi.setProperty("selected",true);
-				}
-				else if(flags==16 && selected==true) {	//deselect ROI
-					//print("deselecting ROI "+i);
-					Roi.setStrokeColor("cyan");
-					Roi.setProperty("selected",false);
-				}
-				else if(flags==18) {	//delete ROI
-					roiManager("Delete");
-					for(j=0;j<roiManager("Count");j++) {	//deselect all ROIs and rename
-						roiManager("Select",j);
-						roiManager("Rename", "ROI "+j);
+//Manual editing of detected nuclei
+function edit_ROIs(image1) {
+	shift=1;
+	ctrl=2; 
+	rightButton=4;
+	alt=8;
+	leftButton=16;
+	insideROI = 32;
+	
+	flags=-1;
+	//x2=-1; y2=-1; z2=-1; flags2=-1;
+	
+	selectWindow(image1);
+	roiManager("Show All without labels");
+	setOption("DisablePopupMenu", true);
+	setBatchMode(true);
+	resetMinAndMax();
+	setBatchMode("show");
+	color_ROIs();
+	print("\\Clear");
+	print("Delete, combine and draw new ROIs. \n- CTRL + leftclick deletes a ROI.\n- SHIFT + leftclick selects ROIs, rightclick merges selected ROIs. \n- Draw new ROIs using the magic wand or the freehand tool and press 't' to add. \n- Press space bar when finished editing.\n");
+	showMessage("Delete, combine and draw new ROIs.","\n- CTRL + leftclick deletes a ROI.\n- SHIFT + leftclick selects ROIs, rightclick merges selected ROIs. \n- Draw new ROIs using the magic wand or the freehand tool and press 't' to add. \n- Press space bar when finished editing.\n\n\nThis information is also printed in the log window.");
+	print("Starting editing "+roiManager("count")+" ROIs...");
+	
+	setTool("freehand");
+	roiManager("Show All Without Labels");
+	setOption("DisablePopupMenu", true);
+	
+	nROIs = roiManager("Count");
+	
+	while(!isKeyDown("space")) {		//exit by pressing space bar
+		getCursorLoc(x, y, z, flags);
+		//print("\\Update:"+flags);
+		if(flags==17 || flags==18)	{	//(de)select multiple ROIs with shift-leftclick; delete ROI with rightclick
+			for(i=0;i<roiManager("Count");i++) {
+				roiManager("Select",i);
+				if(Roi.contains(x, y)==true) {
+				selected = Roi.getProperty("selected");
+					//click to select a single ROI
+					if(flags==17 && selected==false) {		//select ROI
+						//print("selecting ROI "+i);
+						Roi.setStrokeColor("red");
+						Roi.setProperty("selected",true);
+					}
+					else if(flags==17 && selected==true) {	//shift-leftclick: deselect ROI
+						//print("deselecting ROI "+i);
+						Roi.setStrokeColor("cyan");
+						//Roi.setFillColor("1900ffff");
+						Roi.setProperty("selected",false);
+					}
+					else if(flags==18) {	//ctrl-leftclick: delete ROI
+						roiManager("Delete");
+						for(j=0;j<roiManager("Count");j++) {	//deselect all ROIs and rename
+							roiManager("Select",j);
+							roiManager("Rename", "ROI "+j);
+						}
 					}
 				}
 			}
+			roiManager("Deselect");
+			run("Select None");
+			updateDisplay();
 		}
-	}
-	if(flags==4) {
-		selected_ROI_array = newArray(roiManager("Count"));	//create array with indices of selected ROIs
-		j=0;
-		for(i=0;i<roiManager("Count");i++) {
-			roiManager("select",i);
-			selected = Roi.getProperty("selected");
-			if(selected==true) {
-				selected_ROI_array[j] = i;
-				j++;
-				//print(j);
+	
+		if(flags==4) {	//right button: combine selected ROIs
+			selected_ROI_array = newArray(roiManager("Count"));	//create array with indices of selected ROIs
+			j=0;
+			for(i=0;i<roiManager("Count");i++) {
+				roiManager("select",i);
+				selected = Roi.getProperty("selected");
+				if(selected==true) {
+					selected_ROI_array[j] = i;
+					j++;
+					//print(j);
+				}
 			}
-		}
-		//check if more than one ROI is selected. If yes, combine the selected ROIs and update the list
-		selected_ROI_array = Array.trim(selected_ROI_array,j);
-		//print(selected_ROI_array.length + " ROIs selected");
-		if(selected_ROI_array.length > 1) {
-			//print("combining ROIs:");
-			Array.print(selected_ROI_array);
-			roiManager("Select",selected_ROI_array);
-			roiManager("Combine");
-			roiManager("Update");
-//			for(i=1;i<selected_ROI_array.length;i++) {	
-			to_delete_array = Array.copy(selected_ROI_array);														//selecting and deleting redundant ROIs
-			to_delete_array = Array.slice(selected_ROI_array,1,selected_ROI_array.length);	//create array without the first element
+			//check if more than one ROI is selected. If yes, combine the selected ROIs and update the list
+			selected_ROI_array = Array.trim(selected_ROI_array,j);
+			//print(selected_ROI_array.length + " ROIs selected");
+			if(selected_ROI_array.length > 1) {
+				roiManager("Select",selected_ROI_array);
+				roiManager("Combine");
+				roiManager("Update");
+				to_delete_array = Array.copy(selected_ROI_array);								//selecting and deleting redundant ROIs
+				to_delete_array = Array.slice(selected_ROI_array,1,selected_ROI_array.length);	//create array without the first element
 				roiManager("Deselect");
-				//print("deleting ROIs:");
-				Array.print(to_delete_array);
 				roiManager("select", to_delete_array);
 				roiManager("Delete");
-			roiManager("Select",selected_ROI_array[0]);
-			//print("repairing ROI "+selected_ROI_array[0]);
-			run("Enlarge...", "enlarge=1 pixel");			//remove wall between ROIs by enlarging and shrinking with 1 pixel
-			run("Enlarge...", "enlarge=-1 pixel");
-			roiManager("Update");
-			
-			setKeyDown("none");
-			
-			for(i=0;i<roiManager("Count");i++) {	//deselect all ROIs and rename
-			roiManager("Select",i);
-			roiManager("Rename", "ROI "+i);
-			Roi.setProperty("selected",false);
-			Roi.setStrokeColor("cyan");
+				roiManager("Select",selected_ROI_array[0]);
+				run("Enlarge...", "enlarge=1 pixel");			//remove wall between ROIs by enlarging and shrinking with 1 pixel
+				run("Enlarge...", "enlarge=-1 pixel");
+				roiManager("Update");
+				
+				setKeyDown("none");
+				
+				color_ROIs();
 			}
 		}
-	}
-//	x2=x; y2=y; z2=z; flags2=flags;
-	roiManager("Deselect");
-	run("Select None");
-	updateDisplay();	//doesn't work...?
-	wait(50);
+	
+	
+		if(nROIs!=roiManager("Count")) {	//change in the number of ROIs 
+			run("Select None");
+			color_ROIs();
+			nROIs = roiManager("Count");
+		}
+	
+		else wait(50);
+	}	//end of while loop
+	
+	//Deselect and rename all ROIs once more
+	color_ROIs();
 }
-setBatchMode("hide");
-if(verbose==true) setBatchMode(false);
+
+
+function color_ROIs() {
+	run("Remove Overlay");
+
+	for(j=0;j<roiManager("Count");j++) {	//fill all ROIs
+		roiManager("Select",j);
+		roiManager("Rename", "ROI "+j+1);
+		Roi.setProperty("selected",false);
+		//Roi.setFillColor("1900ffff");	//10% cyan fill
+	}
+	roiManager("Deselect");
+	if(roiManager("count")>0) run("From ROI Manager");	//Add overlay containing the ROI fill
+	roiManager("Select All");
+	roiManager("Set Color", "cyan");
+	roiManager("Deselect");
+	roiManager("Show All");
+	updateDisplay();
 }
 
 

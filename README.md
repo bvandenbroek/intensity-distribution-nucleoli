@@ -10,7 +10,7 @@ Workflow summary:
    - rolling ball background subtraction (radius dependent on estimated nucleus size)
    - 3D median filter (currently 2 pixels)
    - maximum intensity projection
-   - Otsu hresholding
+   - Otsu thresholding
    - Distance transform watershed operation to separate touching nuclei.
    - Manual fixing of segmentation mistakes by deletion/addition/combining of ROIs.
 
